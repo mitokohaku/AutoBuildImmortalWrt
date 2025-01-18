@@ -20,6 +20,7 @@ cat /home/build/immortalwrt/files/etc/config/pppoe-settings
 # 输出调试信息
 echo "$(date '+%Y-%m-%d %H:%M:%S') - 开始编译..."
 
+
 # 定义所需安装的包列表 下列插件你都可以自行删减
 PACKAGES=""
 PACKAGES="$PACKAGES curl"
@@ -31,13 +32,14 @@ PACKAGES="$PACKAGES luci-i18n-argon-config-zh-cn"
 PACKAGES="$PACKAGES luci-i18n-package-manager-zh-cn"
 PACKAGES="$PACKAGES luci-i18n-ttyd-zh-cn"
 PACKAGES="$PACKAGES luci-app-openclash"
-PACKAGES="$PACKAGES openssh-sftp-server"
 PACKAGES="$PACKAGES luci-app-zerotier"
 PACKAGES="$PACKAGES luci-app-softethervpn"
-PACKAGES="$PACKAGES luci-app-wechatpush"
-PACKAGES="$PACKAGES luci-app-aliyundrive-webdav"
-PACKAGES="$PACKAGES luci-app-diskman"
 PACKAGES="$PACKAGES luci-app-ddns"
+PACKAGES="$PACKAGES openssh-sftp-server"
+# 增加几个必备组件 方便用户安装iStore
+PACKAGES="$PACKAGES fdisk"
+PACKAGES="$PACKAGES script-utils"
+PACKAGES="$PACKAGES luci-i18n-samba4-zh-cn"
 
 # 增加几个必备组件 方便用户安装iStore
 PACKAGES="$PACKAGES fdisk"
