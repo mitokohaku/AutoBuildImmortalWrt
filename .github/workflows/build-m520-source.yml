@@ -164,7 +164,12 @@ jobs:
 
       - name: Download sources
         working-directory: immortalwrt
-        run: make download -j8 V=s 2>&1 | grep -i 'error' || true
+        run: |
+          # 单个 "curl: (22) ... 404" 是 download.pl 在轮询镜像列表 属正常现象
+          # 只有所有镜像都失败(ERROR: Download failed / 校验和不符)才算真的挂
+          # 不要用 "| grep error || true" 之类写法吞掉退出码 否则失败会被推迟到
+          # 编译阶段 变成一堆看不懂的报错
+          make download -j8 || make download -j1 V=s
 
       - name: Build firmware
         working-directory: immortalwrt
