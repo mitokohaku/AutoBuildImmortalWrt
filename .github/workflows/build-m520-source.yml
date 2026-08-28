@@ -1,0 +1,217 @@
+# 锐捷 RG-MTFi-M520 源码编译工作流
+#
+# 为什么需要源码编译:
+#   ImmortalWrt 官方的 M520 DTS 只开了 &usb3_0 / &usb3_1，没开
+#   &hs_phy_0 &ss_phy_0 &hs_phy_1 &ss_phy_1 这四个 PHY 节点。
+#   kernel 6.6 的 qcom-ipq8064.dtsi 里它们默认 status = "disabled"，
+#   而 dwc3 声明了 phys = <&hs_phy_0>, <&ss_phy_0>，拿不到 phy 就一直
+#   EPROBE_DEFER，USB 主控器根本不注册 → 没有 root hub → /dev/bus/usb
+#   不存在 → lsusb 报 "unable to initialize libusb: -99" → LTE 模块自然
+#   也认不出来。
+#   DTB 是烧进预编译内核的，ImageBuilder 改不了，只能从源码重编。
+#   参照物: in-tree 的 qcom-ipq8064-rb3011.dts 是 hs_phy/ss_phy/usb3 三个都开。
+#
+# 编译耗时较长(GitHub runner 约 1.5~3 小时)，只提供手动触发。
+name: Build RG-MTFi-M520 (from source)
+
+on:
+  workflow_dispatch:
+    inputs:
+      immortalwrt_branch:
+        description: "ImmortalWrt 源码分支"
+        required: true
+        default: openwrt-24.10
+        type: choice
+        options:
+          - openwrt-24.10
+          - master
+      custom_router_ip:
+        description: "路由器管理地址"
+        required: true
+        default: "192.168.100.1"
+      include_modem:
+        description: "集成双卡 LTE 拨号套件"
+        required: true
+        default: 'yes'
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+      publish_release:
+        description: "编译完成后发布 Release"
+        required: true
+        default: 'yes'
+        type: choice
+        options:
+          - 'yes'
+          - 'no'
+
+permissions:
+  contents: write
+
+env:
+  PROFILE: ruijie_rg-mtfi-m520
+  TZ: Asia/Taipei
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout patches
+        uses: actions/checkout@v6
+        with:
+          path: repo
+
+      - name: Free up disk space
+        run: |
+          # OpenWrt 全量编译要 ~25GB，runner 默认可用空间不够
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo docker image prune -af || true
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-setuptools rsync swig unzip zlib1g-dev file wget \
+            libelf-dev ecj fastjar java-propose-classpath javacc \
+            python3-distutils-extra quilt subversion time xsltproc zstd
+
+      - name: Clone ImmortalWrt
+        run: |
+          git clone --depth 1 -b "${{ inputs.immortalwrt_branch }}" \
+            https://github.com/immortalwrt/immortalwrt.git immortalwrt
+          cd immortalwrt && git log --oneline -1
+
+      - name: Apply M520 patches
+        working-directory: immortalwrt
+        run: |
+          for p in "$GITHUB_WORKSPACE"/repo/patches/m520/*.patch; do
+            echo "=== applying $(basename "$p") ==="
+            git apply --check "$p" || { echo "❌ 无法套用 $p"; exit 1; }
+            git apply -v "$p"
+          done
+          echo "--- 确认 PHY 节点已开启 ---"
+          grep -A 2 -E '^&(hs|ss)_phy_[01]' \
+            target/linux/ipq806x/files-6.6/arch/arm/boot/dts/qcom/qcom-ipq8064-rg-mtfi-m520.dts
+          echo "--- 确认 tca9539 驱动已进 DEVICE_PACKAGES ---"
+          grep -A 2 'DEVICE_PACKAGES := ath10k-firmware-qca988x-ct kmod-hwmon-lm75' \
+            target/linux/ipq806x/image/generic.mk
+
+      - name: Update feeds
+        working-directory: immortalwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Generate .config
+        working-directory: immortalwrt
+        run: |
+          cat > .config <<'EOF'
+          CONFIG_TARGET_ipq806x=y
+          CONFIG_TARGET_ipq806x_generic=y
+          CONFIG_TARGET_ipq806x_generic_DEVICE_ruijie_rg-mtfi-m520=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-ssl=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-ttyd-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-filemanager-zh-cn=y
+          CONFIG_PACKAGE_luci-theme-argon=y
+          CONFIG_PACKAGE_openssh-sftp-server=y
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_usbutils=y
+          CONFIG_PACKAGE_i2c-tools=y
+          CONFIG_PACKAGE_kmod-gpio-pca953x=y
+          EOF
+          if [ "${{ inputs.include_modem }}" = "yes" ]; then
+            cat >> .config <<'EOF'
+          CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
+          CONFIG_PACKAGE_uqmi=y
+          CONFIG_PACKAGE_luci-proto-qmi=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-mbim=y
+          CONFIG_PACKAGE_umbim=y
+          CONFIG_PACKAGE_luci-proto-mbim=y
+          CONFIG_PACKAGE_kmod-usb-serial-option=y
+          CONFIG_PACKAGE_kmod-usb-serial-qualcomm=y
+          CONFIG_PACKAGE_kmod-usb-acm=y
+          CONFIG_PACKAGE_usb-modeswitch=y
+          CONFIG_PACKAGE_luci-proto-3g=y
+          CONFIG_PACKAGE_sms-tool=y
+          CONFIG_PACKAGE_luci-i18n-sms-tool-js-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-3ginfo-lite-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-modemband-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-mwan3-zh-cn=y
+          EOF
+          fi
+          make defconfig
+          echo "--- 确认机型被选中 ---"
+          grep -E "DEVICE_ruijie_rg-mtfi-m520|CONFIG_TARGET_ipq806x_generic=" .config
+
+      - name: Set router IP
+        working-directory: immortalwrt
+        run: |
+          mkdir -p files/etc/uci-defaults
+          cat > files/etc/uci-defaults/99-set-ip <<EOF
+          uci set network.lan.ipaddr='${{ inputs.custom_router_ip }}'
+          uci set network.lan.netmask='255.255.255.0'
+          uci commit network
+          EOF
+
+      - name: Download sources
+        working-directory: immortalwrt
+        run: make download -j8 V=s 2>&1 | grep -i 'error' || true
+
+      - name: Build firmware
+        working-directory: immortalwrt
+        run: |
+          # 并行失败时退回单线程跑一次，把真正的报错打出来
+          make -j"$(nproc)" || make -j1 V=s
+
+      - name: Show outputs
+        working-directory: immortalwrt
+        run: |
+          ls -lh bin/targets/ipq806x/generic/
+          echo "--- 固件内是否带上 tca9539 与 usb 驱动 ---"
+          grep -E "kmod-gpio-pca953x|kmod-usb-dwc3|kmod-usb3|usbutils" \
+            bin/targets/ipq806x/generic/*.manifest || true
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-m520-source-${{ github.run_number }}
+          path: immortalwrt/bin/targets/ipq806x/generic/*
+          if-no-files-found: error
+
+      - name: Create info
+        if: inputs.publish_release == 'yes'
+        run: |
+          {
+            echo "### 锐捷 RG-MTFi-M520 源码编译版"
+            echo ""
+            echo "相对官方 ImageBuilder 版本修了两处:"
+            echo "1. **USB 起不来** — DTS 补开 \`&hs_phy_0\` \`&ss_phy_0\` \`&hs_phy_1\` \`&ss_phy_1\`。"
+            echo "   官方只开了 \`&usb3_0\`/\`&usb3_1\`，四个 PHY 节点在 kernel 6.6 里默认 disabled，"
+            echo "   dwc3 拿不到 phy 就不 probe，表现为 \`lsusb: unable to initialize libusb: -99\`、LTE 模块认不到。"
+            echo "2. **SYS 灯不亮 / GPIO 扩展器摸不到** — DEVICE_PACKAGES 补 \`kmod-gpio-pca953x\`(ti,tca9539)。"
+            echo ""
+            echo "- 源码分支: \`${{ inputs.immortalwrt_branch }}\`"
+            echo "- 管理地址: ${{ inputs.custom_router_ip }}"
+            echo "- LTE 套件: ${{ inputs.include_modem }}"
+            echo ""
+            echo "刷机: 原厂固件用 \`factory.bin\`，已是 ImmortalWrt 的用 \`sysupgrade.bin\`。"
+          } > m520-source-info.md
+
+      - name: Publish release
+        if: inputs.publish_release == 'yes'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.PROFILE }}-source
+          name: ImmortalWrt RG-MTFi-M520 (source build)
+          body_path: m520-source-info.md
+          files: immortalwrt/bin/targets/ipq806x/generic/*
+          token: ${{ secrets.GITHUB_TOKEN }}

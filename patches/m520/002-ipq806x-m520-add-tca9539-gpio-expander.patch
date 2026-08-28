@@ -1,0 +1,13 @@
+diff --git a/target/linux/ipq806x/image/generic.mk b/target/linux/ipq806x/image/generic.mk
+index 0aea78d..5ce7a61 100644
+--- a/target/linux/ipq806x/image/generic.mk
++++ b/target/linux/ipq806x/image/generic.mk
+@@ -524,7 +524,7 @@ define Device/ruijie_rg-mtfi-m520
+ 	IMAGE/factory.bin := qsdk-ipq-factory-mmc
+ 	IMAGE/sysupgrade.bin/squashfs := append-rootfs | pad-to $$$$(BLOCKSIZE) | sysupgrade-tar rootfs=$$$$@ | append-metadata
+ 	DEVICE_PACKAGES := ath10k-firmware-qca988x-ct kmod-hwmon-lm75 kmod-rtc-pcf8563 \
+-		kmod-fs-f2fs losetup mkf2fs
++		kmod-gpio-pca953x kmod-fs-f2fs losetup mkf2fs
+ endef
+ TARGET_DEVICES += ruijie_rg-mtfi-m520
+ 

@@ -1,0 +1,31 @@
+diff --git a/target/linux/ipq806x/files-6.6/arch/arm/boot/dts/qcom/qcom-ipq8064-rg-mtfi-m520.dts b/target/linux/ipq806x/files-6.6/arch/arm/boot/dts/qcom/qcom-ipq8064-rg-mtfi-m520.dts
+index 71c3070..a8f71ec 100644
+--- a/target/linux/ipq806x/files-6.6/arch/arm/boot/dts/qcom/qcom-ipq8064-rg-mtfi-m520.dts
++++ b/target/linux/ipq806x/files-6.6/arch/arm/boot/dts/qcom/qcom-ipq8064-rg-mtfi-m520.dts
+@@ -239,10 +239,26 @@
+ 	status = "okay";
+ };
+ 
++&hs_phy_0 {
++	status = "okay";
++};
++
++&ss_phy_0 {
++	status = "okay";
++};
++
+ &usb3_0 {
+ 	status = "okay";
+ };
+ 
++&hs_phy_1 {
++	status = "okay";
++};
++
++&ss_phy_1 {
++	status = "okay";
++};
++
+ &usb3_1 {
+ 	status = "okay";
+ };

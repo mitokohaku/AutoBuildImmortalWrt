@@ -100,6 +100,20 @@ jobs:
           echo "$ROUTER_IP" > "${{ github.workspace }}/custom/custom_router_ip.txt"
           echo "您设置的路由器管理地址是:$ROUTER_IP"
 
+      - name: M520 hardware packages (always)
+        run: |
+          # 该机型 DTS 里声明了 ti,tca9539 I2C GPIO 扩展器(gsbi2 i2c 0x74)
+          # 但 ImmortalWrt 的 DEVICE_PACKAGES 没带它的驱动 且 config-6.6 里
+          # CONFIG_GPIO_PCA953X 也没有内建 → 扩展器不 probe
+          # 后果: gpio-leds 引用 <&gpio_ext 15> 会一直 EPROBE_DEFER SYS 灯不亮
+          #       扩展器另外 15 根脚(含疑似 LTE 模块供电/SIM 选择)完全摸不到
+          # aiamadeus/lede 的 ipq806x 分支就是靠 kmod-gpio-pca953x 带起来的
+          cat >> shell/custom-packages.sh <<'EOF'
+          CUSTOM_PACKAGES="$CUSTOM_PACKAGES kmod-gpio-pca953x"
+          CUSTOM_PACKAGES="$CUSTOM_PACKAGES usbutils i2c-tools"
+          EOF
+          echo "✅ 已追加 tca9539 扩展器驱动与 usb/i2c 诊断工具"
+
       - name: Enable LTE modem packages
         if: env.INCLUDE_MODEM == 'yes'
         run: |
