@@ -449,6 +449,40 @@ on:
           - zyxel_nwa55axe
           - zyxel_wap6805
           - zyxel_wsm20
+          # 新增锐捷M520等 ipq806x/generic 平台(高通IPQ8064)
+          - arris_tr4400-v2
+          - askey_rt4230w-rev6
+          - asrock_g10
+          - buffalo_wxr-2533dhp
+          - compex_wpq864
+          - edgecore_ecw5410
+          - extreme_ap3935
+          - fortinet_fap-421e
+          - linksys_e8350-v1
+          - linksys_ea7500-v1
+          - linksys_ea8500
+          - meraki_mr42
+          - meraki_mr52
+          - nec_wg2600hp
+          - nec_wg2600hp3
+          - netgear_d7800
+          - netgear_r7500
+          - netgear_r7500v2
+          - netgear_r7800
+          - netgear_xr450
+          - netgear_xr500
+          - nokia_ac400i
+          - qcom_ipq8064-ap148
+          - qcom_ipq8064-ap148-legacy
+          - qcom_ipq8064-ap161
+          - qcom_ipq8064-db149
+          - ruijie_rg-mtfi-m520
+          - tplink_ad7200
+          - tplink_c2600
+          - tplink_vr2600v
+          - ubnt_unifi-ac-hd
+          - xiaomi_mi-router-hd
+          - zyxel_nbg6817
           # 新增斐讯K3 AC88U等 bcm53xx/generic 平台
           - phicomm_k3
           - asus_rt-ac3100
@@ -553,6 +587,13 @@ jobs:
       
       - name: Enable Store integration
         run: |
+          profile="${{ github.event.inputs.profile }}"
+          # istore 的第三方 ipk 只提供 arm64/x86 两种架构
+          # 下列平台(mipsel/armv7)没有对应架构的包 强行集成会导致 make image 失败
+          if grep -qxF "$profile" model/mt7621.txt model/bcm53xx.txt model/ipq806x.txt; then
+            echo "⚠️ $profile 所属平台没有对应架构的 istore 软件包 已跳过 luci-app-store"
+            exit 0
+          fi
           if [ "${{ github.event.inputs.enable_store }}" == "true" ]; then
             echo 'CUSTOM_PACKAGES="$CUSTOM_PACKAGES luci-app-store"' >> shell/custom-packages.sh
             echo "✅ 已追加 luci-app-store"
@@ -568,6 +609,8 @@ jobs:
           include_docker="${{ github.event.inputs.include_docker }}"
           # 默认平台
           echo "platform=mediatek/filogic" >> $GITHUB_ENV
+          # 默认下发给固件的 opkg 架构优先级文件(aarch64)
+          archconf="arch/arch.conf"
 
           # 读取 ipq807x 机型文件
           ipq807x_models=$(cat model/ipq807x.txt | tr '\n' '|')
@@ -583,6 +626,15 @@ jobs:
           if [[ "$profile" =~ ^($mt7621_models)$ ]]; then
               case_tag="ramips-mt7621-openwrt-24.10.6"
               case_platform="ramips/mt7621"
+          fi
+
+          # 读取 ipq806x 机型文件
+          ipq806x_models=$(cat model/ipq806x.txt | tr '\n' '|')
+          ipq806x_models=${ipq806x_models%|}
+          if [[ "$profile" =~ ^($ipq806x_models)$ ]]; then
+              case_tag="ipq806x-generic-openwrt-24.10.6"
+              case_platform="ipq806x/generic"
+              case_archconf="arch/ipq806x.conf"
           fi
 
           # 读取 bcm53xx/generic 机型文件
@@ -626,10 +678,13 @@ jobs:
                   cp ${{ github.workspace }}/mediatek-filogic/build23.sh ${{ github.workspace }}/mediatek-filogic/build24.sh
                   ;;
               *)
-                  # 如果前面匹配了 ipq807x、mt7621、bcm53xx 机型文件，则使用对应 tag
+                  # 如果前面匹配了 ipq807x、mt7621、ipq806x、bcm53xx 机型文件，则使用对应 tag
                   if [[ -n "$case_tag" ]]; then
                       tag=$case_tag
                       echo "platform=$case_platform" >> $GITHUB_ENV
+                      if [[ -n "$case_archconf" ]]; then
+                          archconf="$case_archconf"
+                      fi
                   else
                       # 默认分支
                       tag=mediatek-filogic-openwrt-24.10.6
@@ -642,7 +697,7 @@ jobs:
               -v "${{ github.workspace }}/bin:/home/build/immortalwrt/bin" \
               -v "${{ github.workspace }}/glinet:/home/build/immortalwrt/files/etc/uci-defaults" \
               -v "${{ github.workspace }}/custom:/home/build/immortalwrt/files/etc/config" \
-              -v "${{ github.workspace }}/arch/arch.conf:/home/build/immortalwrt/files/etc/opkg/arch.conf" \
+              -v "${{ github.workspace }}/$archconf:/home/build/immortalwrt/files/etc/opkg/arch.conf" \
               -v "${{ github.workspace }}/shell:/home/build/immortalwrt/shell" \
               -v "${{ github.workspace }}/mediatek-filogic/build24.sh:/home/build/immortalwrt/build.sh" \
               -e PROFILE=$profile \

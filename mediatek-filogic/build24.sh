@@ -4,23 +4,79 @@ source shell/switch_repository.sh
 # 该文件实际为imagebuilder容器内的build.sh
 
 #echo "✅ 你选择了第三方软件包：$CUSTOM_PACKAGES"
-# 下载 run 文件仓库
-echo "🔄 正在同步第三方软件仓库 Cloning run file repo..."
-git clone --depth=1 https://github.com/wukongdaily/store.git /tmp/store-run-repo
 
-# 拷贝 run/arm64 下所有 run 文件和ipk文件 到 extra-packages 目录
+# ========= 探测 ImageBuilder 的目标架构 =========
+# 本仓库原本只服务 aarch64 机型 但 mt7621(mipsel) bcm53xx(armv7) ipq806x(armv7)
+# 这些平台的第三方 ipk 架构与 aarch64 不符 必须区别对待
+IB_ARCH=$(sed -n 's/^CONFIG_TARGET_ARCH_PACKAGES="\(.*\)"$/\1/p' .config)
+[ -n "$IB_ARCH" ] || IB_ARCH=$(make -s val.ARCH_PACKAGES 2>/dev/null)
+echo "🎯 ImageBuilder 目标架构: ${IB_ARCH:-unknown}"
+
+# 第三方 store 仓库只提供 arm64 与 x86 两种目录
+case "$IB_ARCH" in
+    aarch64_*) STORE_ARCH="arm64" ;;
+    x86_64)    STORE_ARCH="x86" ;;
+    *)         STORE_ARCH="" ;;
+esac
+
+# 允许保留的 ipk 架构白名单(aarch64 两种子架构 ABI 互通 保持原有行为)
+case "$IB_ARCH" in
+    aarch64_*) ALLOWED_ARCHES="aarch64_generic aarch64_cortex-a53" ;;
+    *)         ALLOWED_ARCHES="$IB_ARCH" ;;
+esac
+
 mkdir -p /home/build/immortalwrt/extra-packages
-cp -r /tmp/store-run-repo/run/arm64/* /home/build/immortalwrt/extra-packages/
+if [ -n "$STORE_ARCH" ]; then
+    # 下载 run 文件仓库
+    echo "🔄 正在同步第三方软件仓库 Cloning run file repo..."
+    git clone --depth=1 https://github.com/wukongdaily/store.git /tmp/store-run-repo
+    # 拷贝 run/$STORE_ARCH 下所有 run 文件和ipk文件 到 extra-packages 目录
+    cp -r /tmp/store-run-repo/run/$STORE_ARCH/* /home/build/immortalwrt/extra-packages/
+    echo "✅ Run files copied to extra-packages:"
+    ls -lh /home/build/immortalwrt/extra-packages/*.run
+else
+    echo "⚪️ $IB_ARCH 没有对应的第三方 store 目录 仅使用 immortalwrt 官方源"
+fi
 
-echo "✅ Run files copied to extra-packages:"
-ls -lh /home/build/immortalwrt/extra-packages/*.run
 # 解压并拷贝ipk到packages目录
 sh shell/prepare-packages.sh
+
+# 剔除与目标架构不符的 ipk 否则 opkg 解析依赖时会直接失败
+for ipk in /home/build/immortalwrt/packages/*.ipk; do
+    [ -e "$ipk" ] || continue
+    ipk_name=$(basename "$ipk")
+    # 架构名本身含下划线(如 aarch64_cortex-a53) 只能按后缀匹配 不能按下划线切分
+    keep=0
+    # 与架构无关的包一律保留 含 luci-app-run_1.0.0_all-r9.ipk 这类非标准命名
+    case "$ipk_name" in
+        *_all.ipk|*_all-*.ipk|*_noarch.ipk|*_noarch-*.ipk) keep=1 ;;
+    esac
+    for a in $ALLOWED_ARCHES; do
+        [ "$keep" -eq 1 ] && break
+        case "$ipk_name" in
+            *_${a}.ipk) keep=1; break ;;
+        esac
+    done
+    if [ "$keep" -eq 0 ]; then
+        echo "🚫 架构不符 移除 $ipk_name"
+        rm -f "$ipk"
+    fi
+done
 ls -lah /home/build/immortalwrt/packages/
+
 # 添加架构优先级信息
-sed -i '1i\
+if [ -n "${IB_ARCH}" ]; then
+    case "$IB_ARCH" in
+        aarch64_*)
+            sed -i '1i\
 arch aarch64_generic 10\n\
 arch aarch64_cortex-a53 15' repositories.conf
+            ;;
+        *)
+            sed -i "1i arch $IB_ARCH 10" repositories.conf
+            ;;
+    esac
+fi
 
 
 
@@ -83,7 +139,17 @@ if echo "$PACKAGES" | grep -q "luci-app-openclash"; then
     echo "✅ 已选择 luci-app-openclash，添加 openclash core"
     mkdir -p files/etc/openclash/core
     # Download clash_meta
-    META_URL="https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-arm64.tar.gz"
+    case "$IB_ARCH" in
+        aarch64_*)                  CORE_ARCH="arm64" ;;
+        x86_64)                     CORE_ARCH="amd64" ;;
+        arm_cortex-a15*|arm_cortex-a7*|arm_cortex-a8*|arm_cortex-a9*neon*) CORE_ARCH="armv7" ;;
+        arm_*)                      CORE_ARCH="armv5" ;;
+        mipsel_*)                   CORE_ARCH="mipsle-softfloat" ;;
+        mips_*)                     CORE_ARCH="mips-softfloat" ;;
+        *)                          CORE_ARCH="arm64" ;;
+    esac
+    echo "OpenClash core arch: $CORE_ARCH"
+    META_URL="https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-$CORE_ARCH.tar.gz"
     wget -qO- $META_URL | tar xOvz > files/etc/openclash/core/clash_meta
     chmod +x files/etc/openclash/core/clash_meta
     # Download GeoIP and GeoSite
