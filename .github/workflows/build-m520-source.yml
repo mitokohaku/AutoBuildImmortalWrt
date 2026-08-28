@@ -174,8 +174,40 @@ jobs:
       - name: Build firmware
         working-directory: immortalwrt
         run: |
-          # 并行失败时退回单线程跑一次，把真正的报错打出来
-          make -j"$(nproc)" || make -j1 V=s
+          # "make -r world: build failed" 那句是通用提示 不含任何原因
+          # 真正的原因在更前面 而且被并行输出打散了 所以失败后用单线程 V=s 重跑
+          # 两份日志都落盘 交给后面的步骤提取和上传
+          if make -j"$(nproc)" > build.log 2>&1; then
+            tail -20 build.log
+            exit 0
+          fi
+          echo "⚠️ 并行编译失败，单线程重跑以取得可读日志"
+          make -j1 V=s > build-verbose.log 2>&1 || true
+          exit 1
+
+      - name: Extract build error
+        if: failure()
+        working-directory: immortalwrt
+        run: |
+          for f in build-verbose.log build.log; do
+            [ -f "$f" ] || continue
+            echo "::group::$f — 最后 80 行"
+            tail -80 "$f"
+            echo "::endgroup::"
+            echo "::group::$f — Error / ERROR 命中处前后文"
+            grep -n -B 30 -A 5 -E "\*\*\* \[.*\] Error [0-9]|^ERROR:|No more mirrors" "$f" | tail -200 || echo "(没有命中)"
+            echo "::endgroup::"
+          done
+
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_number }}
+          path: |
+            immortalwrt/build.log
+            immortalwrt/build-verbose.log
+          if-no-files-found: warn
 
       - name: Show outputs
         working-directory: immortalwrt
