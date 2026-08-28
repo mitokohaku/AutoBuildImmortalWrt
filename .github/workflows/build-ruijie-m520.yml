@@ -50,17 +50,6 @@ on:
         description: "宽带密码 (若启用PPPoE)"
         required: false
 
-  # 改动构建链路时自动跑一次冒烟构建 只产出 artifact 不发 release
-  push:
-    branches:
-      - feat/ipq806x-rg-mtfi-m520
-    paths:
-      - '.github/workflows/build-ruijie-m520.yml'
-      - 'mediatek-filogic/build24.sh'
-      - 'shell/**'
-      - 'arch/ipq806x.conf'
-      - 'model/ipq806x.txt'
-
 permissions:
   contents: write
 
