@@ -134,9 +134,13 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq device-tree-compiler
           mkdir -p "${{ github.workspace }}/kernel"
-          docker run --rm -v "${{ github.workspace }}/kernel:/out" \
+          # 必须 --user root: 容器内的 build 用户是 uid 1000，而 runner 是 uid 1001，
+          # 不加会 "cp: cannot create regular file '/out/...': Permission denied"
+          docker run --rm --user root -v "${{ github.workspace }}/kernel:/out" \
             immortalwrt/imagebuilder:$IB_TAG \
             sh -c 'cp build_dir/target-*/linux-ipq806x_generic/ruijie_rg-mtfi-m520-uImage /out/'
+          # 取回来的文件属主是 root，下面的脚本要就地改写它
+          sudo chown -R "$USER" "${{ github.workspace }}/kernel"
           python3 "${{ github.workspace }}/scripts/patch-m520-uimage.py" \
             "${{ github.workspace }}/kernel/ruijie_rg-mtfi-m520-uImage"
 
