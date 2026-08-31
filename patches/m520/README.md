@@ -37,3 +37,49 @@ gpio-controller，`gpio-leds` 的 SYS 灯挂在 `<&gpio_ext 15>`。但 ImmortalW
     pca953x 0-0074: using no AI
 
 这两条是正常的(没在 DTS 里给 vcc regulator，以及该型号不用 auto-increment)。
+
+---
+
+## 更好的做法: 不编源码，只换设备树
+
+上面两个补丁是给源码编译用的，但源码编译有个硬伤: **kmod 与内核 vermagic 绑死**。
+自编内核是 6.6.151，官方 24.10.6 仓库是 6.6.133，连版本号都不一样，
+`opkg install kmod-usb-audio` 只会得到 `Unknown package`。
+
+而 DTB 只是接在 zImage 后面的一块独立 blob(`KERNEL = kernel-bin | append-dtb`)，
+vermagic 是从内核 `.config` 算的，跟 DTB 无关。所以**只换 DTB 不动内核二进制**，
+官方 kmod 源就依然可用 —— 见 `scripts/patch-m520-uimage.py`，
+已接进 `build-ruijie-m520.yml`。
+
+踩过的坑: 改 KDIR 下的 `image-qcom-ipq8064-rg-mtfi-m520.dtb` **无效**。
+ipq806x 的 ImageBuilder 直接附带组装好的 `ruijie_rg-mtfi-m520-uImage`
+(4096k，DTB 已 append 进去)，KDIR 里连 zImage 都没有，
+`kernel-bin | append-dtb | uImage none` 这条管线根本不会执行。
+实测: 挂载覆盖 image-*.dtb 后产出的固件里，DTB 仍是官方原版(30427 字节，逐字节相同)。
+必须改 uImage 内部那段 DTB，并重算 ih_dcrc / ih_hcrc。
+
+验证结果(本地实测):
+- 补丁前后 uImage 大小都是 4194304，**zImage 区间零字节差异**
+- 仅 8 个头部字节(hcrc/dcrc)与 DTB 区间变化
+- 两个 CRC 重算后校验通过
+- 从产出的 factory.bin 里挖回 DTB，四个 phy 均为 okay
+
+## 全部 disabled 节点的排查
+
+官方 DTB 里共 24 个 `status = "disabled"` 的节点，逐个核对后只有四个 USB PHY 是错的:
+
+| 节点 | 判断 |
+|---|---|
+| `phy@{100f8800,100f8830,110f8800,110f8830}` | ❌ 该开，本补丁修的就是它们 |
+| `ethernet@37000000` / `37600000` | ✅ gmac0/gmac3 未使用，本机走 gmac1+gmac2 |
+| `nand-controller@1ac00000` | ✅ 本机是 eMMC + SPI NOR，无 NAND |
+| `lpass@28100000` | ✅ 板上无音频 codec |
+| `gsbi@{12440000,16500000,16600000}` 及子节点 | ✅ 未接器件 |
+| `gsbi@1a200000/i2c@1a280000` | ✅ 同地址的 spi@1a280000 是开的(SPI NOR) |
+| `gsbi@12480000/serial@12490000` | ✅ gsbi2 走 I2C，UART 未用 |
+| `idle-states/spc` | ✅ ipq806x errata，本就该关 |
+| `amba/mmc@12180000` (sdcc3) | ⚠️ 板上有 SD 卡槽才需要开 |
+| `pci@1b900000` (pcie2) | ⚠️ 有第三个插槽才需要开 |
+
+**mSATA 不需要动**: `sata` / `sata_phy` 从来就是开的，不在 disabled 清单里。
+dmesg 里的 `ata1: SATA link down` 意思是控制器已就绪但没插盘，不是驱动缺失。

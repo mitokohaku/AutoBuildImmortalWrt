@@ -114,8 +114,31 @@ jobs:
           CUSTOM_PACKAGES="$CUSTOM_PACKAGES sms-tool luci-i18n-sms-tool-js-zh-cn"
           CUSTOM_PACKAGES="$CUSTOM_PACKAGES luci-i18n-3ginfo-lite-zh-cn luci-i18n-modemband-zh-cn"
           CUSTOM_PACKAGES="$CUSTOM_PACKAGES luci-i18n-mwan3-zh-cn"
+          # EC25 带 USB audio 的型号会吐一个 UAC 接口出来，VoLTE 语音走那条
+          CUSTOM_PACKAGES="$CUSTOM_PACKAGES kmod-usb-audio alsa-utils"
           EOF
           echo "✅ 已追加 LTE 拨号套件"
+
+      - name: Patch device tree — enable USB PHYs
+        run: |
+          # ImmortalWrt 官方 M520 DTS 只开了 &usb3_0/&usb3_1，没开四个 USB PHY 节点，
+          # dwc3 拿不到 phy 就一直 EPROBE_DEFER → 无 root hub → lsusb 报 libusb -99。
+          #
+          # 注意: 不能改 KDIR 下的 image-<dts>.dtb —— 实测无效。ipq806x 的
+          # ImageBuilder 直接附带组装好的 ruijie_rg-mtfi-m520-uImage(4096k，DTB 已
+          # append 进去)，KDIR 里连 zImage 都没有，"kernel-bin | append-dtb | uImage"
+          # 那条管线根本不会执行。所以要改的是 uImage 内部那段 DTB。
+          #
+          # 这样做的好处: zImage 一个字节不动 → vermagic 不变 → 官方 kmod 源照样能用，
+          # 不必为了一个设备树改动去跑两小时的源码编译。
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq device-tree-compiler
+          mkdir -p "${{ github.workspace }}/kernel"
+          docker run --rm -v "${{ github.workspace }}/kernel:/out" \
+            immortalwrt/imagebuilder:$IB_TAG \
+            sh -c 'cp build_dir/target-*/linux-ipq806x_generic/ruijie_rg-mtfi-m520-uImage /out/'
+          python3 "${{ github.workspace }}/scripts/patch-m520-uimage.py" \
+            "${{ github.workspace }}/kernel/ruijie_rg-mtfi-m520-uImage"
 
       - name: Set executable permissions
         run: chmod +x ${{ github.workspace }}/mediatek-filogic/build24.sh
@@ -132,6 +155,7 @@ jobs:
             -v "${{ github.workspace }}/arch/ipq806x.conf:/home/build/immortalwrt/files/etc/opkg/arch.conf" \
             -v "${{ github.workspace }}/shell:/home/build/immortalwrt/shell" \
             -v "${{ github.workspace }}/mediatek-filogic/build24.sh:/home/build/immortalwrt/build.sh" \
+            -v "${{ github.workspace }}/kernel/ruijie_rg-mtfi-m520-uImage:/home/build/immortalwrt/build_dir/target-arm_cortex-a15+neon-vfpv4_musl_eabi/linux-ipq806x_generic/ruijie_rg-mtfi-m520-uImage:ro" \
             -e PROFILE=$PROFILE \
             -e INCLUDE_DOCKER=$INCLUDE_DOCKER \
             -e ENABLE_PPPOE=$ENABLE_PPPOE \
